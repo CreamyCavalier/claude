@@ -42,7 +42,7 @@ def notes_to_tab(
 
     q = quantize_ms / 1000.0
     bins: Dict[int, List[int]] = {}
-    for start, _end, pitch, amp in note_events:
+    for start, _end, pitch, amp, *_ in note_events:
         if amp < 0.2:
             continue
         b = int(start / q)

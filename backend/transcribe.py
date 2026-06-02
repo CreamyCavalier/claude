@@ -70,8 +70,20 @@ def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
         "no_warnings": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    # Try browser cookies (YouTube bot-check) — Safari first, then Chrome
+    for browser in ("safari", "chrome", "chromium", "firefox", None):
+        opts = dict(ydl_opts)
+        if browser:
+            opts["cookiesfrombrowser"] = (browser, None, None, None)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            break
+        except Exception as exc:
+            if browser is None:
+                raise
+            if "Sign in" not in str(exc) and "bot" not in str(exc):
+                raise  # unrelated error, don't retry
 
     raw_path = next(
         (os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith(".wav")),

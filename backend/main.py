@@ -59,6 +59,30 @@ async def export_midi(job_id: str, track_idx: int):
     )
 
 
+@app.get("/api/export/gp/{job_id}/{track_idx}")
+async def export_gp(job_id: str, track_idx: int):
+    job = _jobs.get(job_id)
+    if not job or job["status"] != "done":
+        raise HTTPException(status_code=404, detail="Job not found or not complete")
+    tracks = job.get("tracks", [])
+    if track_idx >= len(tracks):
+        raise HTTPException(status_code=404, detail="Track not found")
+    track = tracks[track_idx]
+    from gp_export import notes_to_gp5_bytes
+    gp_bytes = notes_to_gp5_bytes(
+        track["columns"],
+        tuning=track["tuning"],
+        tempo_bpm=120,
+        track_name=track["name"],
+    )
+    filename = f"{track['name'].lower()}_tab.gp5"
+    return StreamingResponse(
+        io.BytesIO(gp_bytes),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 async def _run_job(job_id: str, url: str, max_duration: int) -> None:
     def set_status(msg: str) -> None:
         if job_id in _jobs:

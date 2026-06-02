@@ -28,9 +28,8 @@ except ImportError:
 
 from tab_gen import notes_to_tab, notes_to_columns
 
-# MIDI pitch threshold: >= 48 is guitar range, < 48 is bass range
-BASS_PITCH_THRESHOLD = 48
-# Minimum note events to include a bass track (avoids spurious detection)
+# Guitar's lowest string is E2 = MIDI 40. Only notes below that are true bass.
+BASS_PITCH_THRESHOLD = 40
 MIN_BASS_NOTES = 10
 
 

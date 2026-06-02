@@ -37,8 +37,8 @@ MIN_VOICE_NOTES = 25  # minimum notes per voice to create a separate track
 def _split_guitar_voices(events):
     """Separate guitar events into lead (melodic) and rhythm (chordal) voices.
 
-    Notes that appear in time bins with 3+ simultaneous pitches are chordal
-    (rhythm/strumming); bins with 1-2 notes are melodic (lead/single-note lines).
+    Bins with 3+ simultaneous pitches → chordal (rhythm/strumming).
+    Bins with 1-2 notes → melodic (lead/single-note lines).
     Returns a list of (events, name) pairs — either one pair or two.
     """
     q = 0.08  # 80 ms quantise window
@@ -83,7 +83,7 @@ def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
         [
             "ffmpeg", "-i", raw_path,
             "-t", str(max_duration),
-            "-ar", "22050", "-ac", "1",
+            "-ar", "44100", "-ac", "2",  # keep stereo + higher rate for demucs
             trimmed_path, "-y", "-loglevel", "quiet",
         ],
         check=True,
@@ -91,8 +91,64 @@ def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
     return trimmed_path
 
 
+def _run_demucs(audio_path: str, stems_dir: str, on_status: Callable) -> Optional[str]:
+    """Separate guitar stem with demucs htdemucs_6s model.
+
+    Returns path to guitar.wav stem, or None if demucs is unavailable / fails.
+    First call downloads ~2 GB model from the internet.
+    """
+    try:
+        import demucs  # noqa: F401 — just check it's installed
+    except ImportError:
+        return None
+
+    on_status("Separating guitar stem with AI source separation "
+              "(first run downloads ~320 MB model)...")
+    os.makedirs(stems_dir, exist_ok=True)
+
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-m", "demucs",
+                "--two-stems", "guitar",   # outputs guitar.wav + no_guitar.wav
+                "-n", "htdemucs",          # htdemucs is compact (~320 MB vs 6-stem ~2 GB)
+                "--out", stems_dir,
+                audio_path,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=900,  # 15-min ceiling
+        )
+    except Exception as exc:
+        on_status(f"Source separation skipped ({type(exc).__name__}), "
+                  "using full mix instead...")
+        return None
+
+    # Output layout: stems_dir/htdemucs/<audio_stem>/guitar.wav
+    audio_name = os.path.splitext(os.path.basename(audio_path))[0]
+    candidate = os.path.join(stems_dir, "htdemucs", audio_name, "guitar.wav")
+    if os.path.exists(candidate):
+        return candidate
+
+    # Fallback: walk and find any guitar.wav
+    for root, _, files in os.walk(stems_dir):
+        for f in files:
+            if f == "guitar.wav":
+                return os.path.join(root, f)
+
+    return None
+
+
+def _to_mono_22k(src: str, dst: str) -> None:
+    """Downsample to 22050 Hz mono for basic-pitch."""
+    subprocess.run(
+        ["ffmpeg", "-i", src, "-ar", "22050", "-ac", "1", dst, "-y", "-loglevel", "quiet"],
+        check=True,
+    )
+
+
 def _serialize_events(note_events) -> List[List]:
-    """Convert note event tuples to plain lists with exactly 4 elements for JSON serialization."""
+    """Convert note event tuples to plain lists for JSON serialization."""
     result = []
     for event in note_events:
         start, end, pitch, amp, *_ = event
@@ -113,28 +169,43 @@ def transcribe_youtube(
         status("Downloading audio from YouTube...")
         audio_path = _download_audio(url, tmpdir, max_duration)
 
-        status("Loading AI model...")
+        # Try demucs source separation first
+        stems_dir = os.path.join(tmpdir, "stems")
+        guitar_stem = _run_demucs(audio_path, stems_dir, status)
+
+        if guitar_stem:
+            # Downsample guitar stem for basic-pitch
+            bp_input = os.path.join(tmpdir, "guitar_22k.wav")
+            _to_mono_22k(guitar_stem, bp_input)
+            status("Analyzing guitar stem with AI pitch detection...")
+        else:
+            # No demucs — downsample full mix
+            bp_input = os.path.join(tmpdir, "audio_22k.wav")
+            _to_mono_22k(audio_path, bp_input)
+            status("Analyzing audio — this takes 30–60 s...")
+
+        status("Loading AI pitch model...")
         from basic_pitch.inference import predict
         from basic_pitch import ICASSP_2022_MODEL_PATH
 
-        status("Analyzing audio — this takes 30–60 s...")
+        status("Detecting notes..." if guitar_stem else "Analyzing audio — this takes 30–60 s...")
         _model_out, _midi, note_events = predict(
-            audio_path,
+            bp_input,
             ICASSP_2022_MODEL_PATH,
             minimum_frequency=80.0,
             maximum_frequency=1400.0,
             onset_threshold=0.5,
             frame_threshold=0.3,
+            minimum_note_length=58,   # ~58 ms — filters out noise blips
         )
 
         status("Generating tracks...")
 
         guitar_events = [e for e in note_events if e[2] >= BASS_PITCH_THRESHOLD]
-        bass_events = [e for e in note_events if e[2] < BASS_PITCH_THRESHOLD]
+        bass_events   = [e for e in note_events if e[2] < BASS_PITCH_THRESHOLD]
 
         tracks = []
 
-        # Split guitar into lead + rhythm voices when both have enough content
         for voice_events, voice_name in _split_guitar_voices(guitar_events):
             tracks.append({
                 "name": voice_name,
@@ -144,7 +215,6 @@ def transcribe_youtube(
                 "columns": notes_to_columns(voice_events, tuning="guitar"),
             })
 
-        # Bass track — only if enough notes detected
         if len(bass_events) > MIN_BASS_NOTES:
             tracks.append({
                 "name": "Bass",
@@ -154,10 +224,7 @@ def transcribe_youtube(
                 "columns": notes_to_columns(bass_events, tuning="bass"),
             })
 
-        # Compute duration from all note events
-        duration = 0.0
-        if note_events:
-            duration = float(max(e[1] for e in note_events))
+        duration = float(max(e[1] for e in note_events)) if note_events else 0.0
 
         return {
             "tracks": tracks,

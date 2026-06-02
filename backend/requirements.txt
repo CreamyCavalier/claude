@@ -6,3 +6,4 @@ basic-pitch>=0.2.6
 python-multipart>=0.0.6
 mido>=1.3.0
 PyGuitarPro>=0.7.0
+demucs>=4.0.0

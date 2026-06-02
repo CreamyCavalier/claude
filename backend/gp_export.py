@@ -1,18 +1,24 @@
 """Export tab column data to Guitar Pro 5 (.gp5) format via PyGuitarPro."""
 
-import io
 import math
+import os
+import tempfile
 
 import guitarpro
 
-QUARTER_TIME = 960  # GP internal ticks per quarter note
-MEASURE_TICKS = QUARTER_TIME * 4  # 4/4 time
+QUARTER_TIME = 960       # GP internal ticks per quarter note
+MEASURE_TICKS = QUARTER_TIME * 4   # 4/4 time = 3840 ticks
 SIXTEENTH_TICKS = QUARTER_TIME // 4  # 240 ticks per 16th note
 
 _TUNING_STRINGS = {
     "guitar": [(1, 64), (2, 59), (3, 55), (4, 50), (5, 45), (6, 40)],
     "bass":   [(1, 43), (2, 38), (3, 33), (4, 28)],
 }
+
+# NoteType.normal = fretted note (default is NoteType.tie which produces silence)
+_NOTE_NORMAL = getattr(getattr(guitarpro, "NoteType", None), "normal", 1)
+_BEAT_NORMAL = getattr(getattr(guitarpro, "BeatStatus", None), "normal", 1)
+_BEAT_REST   = getattr(getattr(guitarpro, "BeatStatus", None), "rest",   2)
 
 
 def notes_to_gp5_bytes(
@@ -36,7 +42,7 @@ def notes_to_gp5_bytes(
         t = col["time"]
         m = min(int(t / measure_sec), num_measures - 1)
         offset_sec = t - m * measure_sec
-        slot = round(offset_sec / (beat_sec / 4))  # 16th-note grid
+        slot = round(offset_sec / (beat_sec / 4))
         slot = max(0, min(15, slot))
         beat_map.setdefault(m, {})[slot] = col["notes"]
 
@@ -76,19 +82,31 @@ def notes_to_gp5_bytes(
             beat.duration = guitarpro.Duration(value=16)
 
             if slot in m_notes:
-                beat.status = guitarpro.BeatStatus.normal
+                beat.status = _BEAT_NORMAL
                 for s_str, fret in m_notes[slot].items():
                     s = int(s_str) + 1  # GP strings are 1-indexed
                     note = guitarpro.Note(s)
                     note.value = int(fret)
+                    note.type = _NOTE_NORMAL  # must be "normal" or note is silent
                     beat.notes.append(note)
             else:
-                beat.status = guitarpro.BeatStatus.rest
+                beat.status = _BEAT_REST
 
             voice.beats.append(beat)
 
         track.measures.append(measure)
 
-    buf = io.BytesIO()
-    guitarpro.write(song, buf)
-    return buf.getvalue()
+    # Write via temp file so guitarpro detects GP5 format from the .gp5 extension.
+    # guitarpro.write(song, BytesIO) silently picks wrong format when
+    # song.versionTuple is None (freshly created Song).
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".gp5")
+    os.close(tmp_fd)
+    try:
+        guitarpro.write(song, tmp_path)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass

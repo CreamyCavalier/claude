@@ -31,6 +31,35 @@ from tab_gen import notes_to_tab, notes_to_columns
 # Guitar's lowest string is E2 = MIDI 40. Only notes below that are true bass.
 BASS_PITCH_THRESHOLD = 40
 MIN_BASS_NOTES = 10
+MIN_VOICE_NOTES = 25  # minimum notes per voice to create a separate track
+
+
+def _split_guitar_voices(events):
+    """Separate guitar events into lead (melodic) and rhythm (chordal) voices.
+
+    Notes that appear in time bins with 3+ simultaneous pitches are chordal
+    (rhythm/strumming); bins with 1-2 notes are melodic (lead/single-note lines).
+    Returns a list of (events, name) pairs — either one pair or two.
+    """
+    q = 0.08  # 80 ms quantise window
+    bins: dict = {}
+    for e in events:
+        start, _, _, amp, *_ = e
+        if amp < 0.2:
+            continue
+        b = int(start / q)
+        bins.setdefault(b, []).append(e)
+
+    lead, rhythm = [], []
+    for bin_events in bins.values():
+        if len(bin_events) >= 3:
+            rhythm.extend(bin_events)
+        else:
+            lead.extend(bin_events)
+
+    if len(lead) >= MIN_VOICE_NOTES and len(rhythm) >= MIN_VOICE_NOTES:
+        return [(lead, "Lead Guitar"), (rhythm, "Rhythm Guitar")]
+    return [(events, "Guitar")]
 
 
 def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
@@ -100,29 +129,27 @@ def transcribe_youtube(
 
         status("Generating tracks...")
 
-        # Split into guitar (pitch >= 48) and bass (pitch < 48) tracks
         guitar_events = [e for e in note_events if e[2] >= BASS_PITCH_THRESHOLD]
         bass_events = [e for e in note_events if e[2] < BASS_PITCH_THRESHOLD]
 
         tracks = []
 
-        # Guitar track
-        guitar_serialized = _serialize_events(guitar_events)
-        tracks.append({
-            "name": "Guitar",
-            "tuning": "guitar",
-            "note_events": guitar_serialized,
-            "tab": notes_to_tab(guitar_events, tuning="guitar"),
-            "columns": notes_to_columns(guitar_events, tuning="guitar"),
-        })
+        # Split guitar into lead + rhythm voices when both have enough content
+        for voice_events, voice_name in _split_guitar_voices(guitar_events):
+            tracks.append({
+                "name": voice_name,
+                "tuning": "guitar",
+                "note_events": _serialize_events(voice_events),
+                "tab": notes_to_tab(voice_events, tuning="guitar"),
+                "columns": notes_to_columns(voice_events, tuning="guitar"),
+            })
 
         # Bass track — only if enough notes detected
         if len(bass_events) > MIN_BASS_NOTES:
-            bass_serialized = _serialize_events(bass_events)
             tracks.append({
                 "name": "Bass",
                 "tuning": "bass",
-                "note_events": bass_serialized,
+                "note_events": _serialize_events(bass_events),
                 "tab": notes_to_tab(bass_events, tuning="bass"),
                 "columns": notes_to_columns(bass_events, tuning="bass"),
             })

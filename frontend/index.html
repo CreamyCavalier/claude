@@ -359,6 +359,18 @@
 
     .btn-outline:hover:not(:disabled) { background: var(--accent); color: #fff; }
 
+    #sound-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      padding: 0.45rem 0.7rem;
+      cursor: pointer;
+    }
+
+    #sound-select:focus { outline: none; border-color: var(--accent); }
+
     footer {
       margin-top: auto;
       padding-top: 2rem;
@@ -440,8 +452,13 @@
       <table id="tab-table"><tbody id="tab-tbody"></tbody></table>
     </div>
     <div class="controls-row">
-      <button id="play-btn" class="btn-sm" onclick="playSynth()">&#9654; Play Synth</button>
+      <button id="play-btn" class="btn-sm" onclick="playSynth()">&#9654; Play</button>
       <button id="stop-btn" class="btn-sm btn-secondary" onclick="stopPlayback()">&#9209; Stop</button>
+      <select id="sound-select" title="Synth sound">
+        <option value="clean">Clean</option>
+        <option value="overdrive">Overdrive</option>
+        <option value="distortion">Distortion</option>
+      </select>
       <div id="midi-btns"></div>
       <button id="copy-btn" class="btn-sm btn-outline" onclick="copyTab()">&#128203; Copy Tab</button>
     </div>
@@ -464,7 +481,6 @@ let synthPlayInterval = null;
 let ytSyncInterval = null;
 let ytPlayer = null;
 let ytSyncing = false;
-let pluckSynths = [];
 
 // ─── YouTube IFrame API ───────────────────────────────────────────────────────
 window.onYouTubeIframeAPIReady = function() {};
@@ -731,8 +747,53 @@ function updatePlayhead(currentTime) {
   }
 }
 
-// ─── Synth playback (Karplus-Strong plucked string pool) ─────────────────────
-const POOL_SIZE = 16;
+// ─── Synth playback ───────────────────────────────────────────────────────────
+let activeSynthNodes = [];  // all Tone nodes created for the current playback
+
+function _buildSynth(soundType) {
+  // Returns a PolySynth wired through an effects chain to Destination.
+  // activeSynthNodes is populated so stopPlayback() can dispose everything.
+  let synth, chain;
+
+  if (soundType === 'distortion') {
+    synth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'sawtooth' },
+      envelope: { attack: 0.005, decay: 0.15, sustain: 0.5, release: 0.6 },
+      volume: -10,
+    });
+    const dist = new Tone.Distortion(0.85);
+    const chorus = new Tone.Chorus(4, 2.5, 0.4).start();
+    const reverb = new Tone.Reverb({ decay: 1.8, wet: 0.3 });
+    chain = [synth, dist, chorus, reverb, Tone.Destination];
+  } else if (soundType === 'overdrive') {
+    synth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'sawtooth' },
+      envelope: { attack: 0.004, decay: 0.2, sustain: 0.3, release: 0.5 },
+      volume: -8,
+    });
+    const dist = new Tone.Distortion(0.45);
+    const reverb = new Tone.Reverb({ decay: 1.2, wet: 0.2 });
+    chain = [synth, dist, reverb, Tone.Destination];
+  } else {
+    // Clean — triangle wave with fast decay (pluck-like), light reverb
+    synth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'triangle' },
+      envelope: { attack: 0.002, decay: 0.5, sustain: 0.0, release: 0.3 },
+      volume: -6,
+    });
+    const reverb = new Tone.Reverb({ decay: 1.5, wet: 0.18 });
+    chain = [synth, reverb, Tone.Destination];
+  }
+
+  // Wire the chain
+  for (let i = 0; i < chain.length - 1; i++) {
+    chain[i].connect(chain[i + 1]);
+  }
+
+  // Store non-Destination nodes for disposal
+  activeSynthNodes = chain.slice(0, -1);
+  return synth;
+}
 
 async function playSynth() {
   stopPlayback();
@@ -745,26 +806,21 @@ async function playSynth() {
 
   await Tone.start();
 
-  // Karplus-Strong pluck synth pool for polyphony
-  pluckSynths = Array.from({ length: POOL_SIZE }, () =>
-    new Tone.PluckSynth({ attackNoise: 1, dampening: 4000, resonance: 0.98 }).toDestination()
-  );
+  const soundType = document.getElementById('sound-select').value;
+  const synth = _buildSynth(soundType);
 
   Tone.Transport.stop();
   Tone.Transport.cancel();
   Tone.Transport.position = 0;
 
   const events = [...track.note_events].sort((a, b) => a[0] - b[0]);
-  let poolIdx = 0;
 
-  for (const event of events) {
-    const [start, , pitch, amp] = event;
-    if (amp < 0.15) continue;
+  for (const [start, end, pitch, amp] of events) {
+    if (amp < 0.2) continue;
     const freq = Tone.Frequency(pitch, 'midi').toFrequency();
-    const idx = poolIdx % POOL_SIZE;
-    poolIdx++;
+    const dur = Math.max(0.05, end - start);
     Tone.Transport.schedule((time) => {
-      try { pluckSynths[idx].triggerAttack(freq, time); } catch (_) {}
+      try { synth.triggerAttackRelease(freq, dur, time); } catch (_) {}
     }, start);
   }
 
@@ -783,8 +839,8 @@ async function playSynth() {
 function stopPlayback() {
   if (synthPlayInterval) { clearInterval(synthPlayInterval); synthPlayInterval = null; }
   try { Tone.Transport.stop(); Tone.Transport.cancel(); } catch (_) {}
-  pluckSynths.forEach(s => { try { s.dispose(); } catch (_) {} });
-  pluckSynths = [];
+  activeSynthNodes.forEach(n => { try { n.dispose(); } catch (_) {} });
+  activeSynthNodes = [];
   stopYTSync();
 }
 

@@ -38,6 +38,7 @@ source "$VENV_DIR/bin/activate"
 
 # ── Install dependencies ──────────────────────────────────────────────────────
 echo "==> Installing dependencies (first run takes a few minutes)..."
+pip install --upgrade pip setuptools wheel --quiet
 pip install -r "$BACKEND_DIR/requirements.txt" --quiet
 
 # ── Check ffmpeg ──────────────────────────────────────────────────────────────

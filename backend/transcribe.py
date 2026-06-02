@@ -2,10 +2,29 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 from typing import Callable, Optional
 
 import yt_dlp
+
+# basic-pitch calls pkg_resources.resource_filename to locate its model files.
+# On some macOS/Python 3.11 setups setuptools doesn't register pkg_resources
+# even when installed. Polyfill the one function basic-pitch actually needs.
+try:
+    import pkg_resources  # noqa: F401
+except ImportError:
+    import importlib
+    import types
+
+    _mock = types.ModuleType("pkg_resources")
+
+    def _resource_filename(package_name: str, resource_name: str) -> str:
+        pkg = importlib.import_module(package_name)
+        return os.path.join(os.path.dirname(pkg.__file__), resource_name)
+
+    _mock.resource_filename = _resource_filename
+    sys.modules["pkg_resources"] = _mock
 
 from tab_gen import notes_to_tab
 

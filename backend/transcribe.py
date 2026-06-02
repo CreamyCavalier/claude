@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional, Any
 
 import yt_dlp
 
@@ -26,7 +26,12 @@ except ImportError:
     _mock.resource_filename = _resource_filename
     sys.modules["pkg_resources"] = _mock
 
-from tab_gen import notes_to_tab
+from tab_gen import notes_to_tab, notes_to_columns
+
+# MIDI pitch threshold: >= 48 is guitar range, < 48 is bass range
+BASS_PITCH_THRESHOLD = 48
+# Minimum note events to include a bass track (avoids spurious detection)
+MIN_BASS_NOTES = 10
 
 
 def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
@@ -58,11 +63,20 @@ def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
     return trimmed_path
 
 
+def _serialize_events(note_events) -> List[List]:
+    """Convert note event tuples to plain lists with exactly 4 elements for JSON serialization."""
+    result = []
+    for event in note_events:
+        start, end, pitch, amp, *_ = event
+        result.append([float(start), float(end), int(pitch), float(amp)])
+    return result
+
+
 def transcribe_youtube(
     url: str,
     max_duration: int = 60,
     on_status: Optional[Callable[[str], None]] = None,
-) -> str:
+) -> Dict[str, Any]:
     def status(msg: str) -> None:
         if on_status:
             on_status(msg)
@@ -85,5 +99,41 @@ def transcribe_youtube(
             frame_threshold=0.3,
         )
 
-        status("Generating guitar tab...")
-        return notes_to_tab(note_events)
+        status("Generating tracks...")
+
+        # Split into guitar (pitch >= 48) and bass (pitch < 48) tracks
+        guitar_events = [e for e in note_events if e[2] >= BASS_PITCH_THRESHOLD]
+        bass_events = [e for e in note_events if e[2] < BASS_PITCH_THRESHOLD]
+
+        tracks = []
+
+        # Guitar track
+        guitar_serialized = _serialize_events(guitar_events)
+        tracks.append({
+            "name": "Guitar",
+            "tuning": "guitar",
+            "note_events": guitar_serialized,
+            "tab": notes_to_tab(guitar_events, tuning="guitar"),
+            "columns": notes_to_columns(guitar_events, tuning="guitar"),
+        })
+
+        # Bass track — only if enough notes detected
+        if len(bass_events) > MIN_BASS_NOTES:
+            bass_serialized = _serialize_events(bass_events)
+            tracks.append({
+                "name": "Bass",
+                "tuning": "bass",
+                "note_events": bass_serialized,
+                "tab": notes_to_tab(bass_events, tuning="bass"),
+                "columns": notes_to_columns(bass_events, tuning="bass"),
+            })
+
+        # Compute duration from all note events
+        duration = 0.0
+        if note_events:
+            duration = float(max(e[1] for e in note_events))
+
+        return {
+            "tracks": tracks,
+            "duration": duration,
+        }

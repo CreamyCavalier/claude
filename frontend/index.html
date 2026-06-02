@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Guitar Tab Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -21,6 +23,7 @@
       --error: #ef4444;
       --tab-bg: #0d1117;
       --tab-text: #7ee787;
+      --tab-active: #7c3aed;
     }
 
     body {
@@ -56,8 +59,12 @@
       border-radius: 12px;
       padding: 1.75rem;
       width: 100%;
-      max-width: 740px;
+      max-width: 1200px;
       margin-bottom: 1.5rem;
+    }
+
+    .card-narrow {
+      max-width: 740px;
     }
 
     label {
@@ -160,42 +167,192 @@
       line-height: 1.6;
     }
 
-    #output-card { display: none; }
-    #output-card.visible { display: block; }
-
-    .output-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
+    /* Main two-panel layout */
+    #main-panel {
+      display: none;
+      width: 100%;
+      max-width: 1200px;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
     }
 
-    .output-header h2 { font-size: 0.95rem; font-weight: 600; }
+    #main-panel.visible {
+      display: flex;
+      align-items: flex-start;
+    }
+
+    /* Left panel: YouTube embed */
+    #left-panel {
+      flex: 0 0 40%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    #left-panel h2 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    #yt-embed-container {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    #yt-embed-container iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    #yt-placeholder {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: var(--surface2);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    #sync-btn {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+      padding: 0.5rem 1rem;
+    }
+
+    #sync-btn:hover:not(:disabled) { background: var(--border); }
+    #sync-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Right panel: Tab display */
+    #right-panel {
+      flex: 0 0 calc(60% - 1.5rem);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-width: 0;
+    }
+
+    /* Track selector pills */
+    .track-pills {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      background: var(--surface2);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.3rem 0.9rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .pill:hover { background: var(--border); color: var(--text); }
+    .pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    /* Tab table */
+    #tab-scroll {
+      overflow-x: auto;
+      background: var(--tab-bg);
+      border-radius: 8px;
+      border: 1px solid #1e2737;
+      padding: 1rem 0.5rem;
+      max-height: 50vh;
+      overflow-y: auto;
+    }
+
+    #tab-table {
+      border-collapse: collapse;
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+      font-size: 0.78rem;
+      line-height: 1.7;
+    }
+
+    #tab-table td {
+      padding: 0;
+      white-space: nowrap;
+    }
+
+    .ts-label {
+      color: var(--tab-text);
+      padding-right: 2px;
+      user-select: none;
+      position: sticky;
+      left: 0;
+      background: var(--tab-bg);
+      z-index: 1;
+    }
+
+    .tc {
+      width: 2.5ch;
+      min-width: 2.5ch;
+      text-align: center;
+      color: var(--tab-text);
+      cursor: default;
+      transition: background 0.1s;
+    }
+
+    .tc.active {
+      background: var(--tab-active);
+      color: #fff;
+    }
+
+    /* Controls row */
+    .controls-row {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .btn-sm {
+      font-size: 0.82rem;
+      padding: 0.45rem 0.9rem;
+    }
 
     .btn-secondary {
       background: var(--surface2);
       color: var(--text-muted);
-      font-size: 0.8rem;
-      padding: 0.35rem 0.85rem;
       border: 1px solid var(--border);
     }
 
-    .btn-secondary:hover:not(:disabled) { background: var(--border); }
+    .btn-secondary:hover:not(:disabled) { background: var(--border); color: var(--text); }
 
-    pre#tab-output {
-      background: var(--tab-bg);
-      color: var(--tab-text);
-      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
-      font-size: 0.78rem;
-      line-height: 1.7;
-      padding: 1.25rem;
-      border-radius: 8px;
-      overflow-x: auto;
-      white-space: pre;
-      border: 1px solid #1e2737;
-      max-height: 65vh;
-      overflow-y: auto;
+    .btn-outline {
+      background: transparent;
+      color: var(--accent-light);
+      border: 1px solid var(--accent);
     }
+
+    .btn-outline:hover:not(:disabled) { background: var(--accent); color: #fff; }
 
     footer {
       margin-top: auto;
@@ -204,16 +361,26 @@
       font-size: 0.75rem;
       text-align: center;
     }
+
+    @media (max-width: 800px) {
+      #main-panel.visible {
+        flex-direction: column;
+      }
+      #left-panel, #right-panel {
+        flex: unset;
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>🎸 AI Guitar Tab Generator</h1>
-  <p>Paste a YouTube URL — get AI-generated guitar tabs</p>
+  <h1>AI Guitar Tab Generator</h1>
+  <p>Paste a YouTube URL — get AI-generated guitar tabs with playback</p>
 </header>
 
-<div class="card">
+<div class="card card-narrow">
   <label for="yt-url">YouTube URL</label>
   <div class="input-row">
     <input
@@ -250,107 +417,489 @@
   </p>
 </div>
 
-<div class="card" id="output-card">
-  <div class="output-header">
-    <h2>Guitar Tab</h2>
-    <button class="btn-secondary" onclick="copyTab()">Copy</button>
+<!-- Main two-panel layout shown after generation -->
+<div id="main-panel">
+  <!-- Left 40%: YouTube embed -->
+  <div id="left-panel">
+    <h2>Video</h2>
+    <div id="yt-embed-container">
+      <div id="yt-placeholder">Video will appear here after generation</div>
+    </div>
+    <button id="sync-btn" onclick="toggleYTSync()" disabled>&#9654; Sync with Video</button>
   </div>
-  <pre id="tab-output"></pre>
+
+  <!-- Right 60%: Tab display -->
+  <div id="right-panel">
+    <div id="track-pills" class="track-pills"></div>
+    <div id="tab-scroll">
+      <table id="tab-table"><tbody id="tab-tbody"></tbody></table>
+    </div>
+    <div class="controls-row">
+      <button id="play-btn" class="btn-sm" onclick="playSynth()">&#9654; Play Synth</button>
+      <button id="stop-btn" class="btn-sm btn-secondary" onclick="stopPlayback()">&#9209; Stop</button>
+      <div id="midi-btns"></div>
+      <button id="copy-btn" class="btn-sm btn-outline" onclick="copyTab()">&#128203; Copy Tab</button>
+    </div>
+  </div>
 </div>
 
-<footer>Powered by basic-pitch &middot; yt-dlp &middot; FastAPI &middot; runs 100% on your machine</footer>
+<footer>Powered by basic-pitch &middot; yt-dlp &middot; FastAPI &middot; Tone.js &middot; runs 100% on your machine</footer>
 
 <script>
-  let pollTimer = null;
+// ─── App state ───────────────────────────────────────────────────────────────
+let pollTimer = null;
+let currentJobId = null;
+let currentTracks = [];
+let currentTrackIdx = 0;
+let currentColumns = [];  // columns for the active track
+let activeColIdx = -1;
 
-  async function generate() {
-    const url = document.getElementById('yt-url').value.trim();
-    if (!url) { alert('Paste a YouTube URL first.'); return; }
+// Playback state
+let synthPlayInterval = null;
+let ytSyncInterval = null;
+let ytPlayer = null;
+let ytReady = false;
+let ytSyncing = false;
+let toneStarted = false;
+let synthScheduled = false;
 
-    const duration = parseInt(document.getElementById('duration').value, 10);
-    const btn = document.getElementById('gen-btn');
-    btn.disabled = true;
-    document.getElementById('output-card').classList.remove('visible');
-    document.getElementById('tab-output').textContent = '';
-    setStatus('processing', 'Submitting job...');
+// ─── YouTube IFrame API ───────────────────────────────────────────────────────
+window.onYouTubeIframeAPIReady = function() {
+  ytReady = true;
+};
 
-    try {
-      const res = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_url: url, max_duration: duration }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
-      startPolling(data.job_id);
-    } catch (err) {
-      setStatus('error', err.message);
-      btn.disabled = false;
+function extractVideoId(url) {
+  try {
+    const u = new URL(url);
+    // youtu.be/<id>
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1);
+    // youtube.com/watch?v=<id>
+    const v = u.searchParams.get('v');
+    if (v) return v;
+    // youtube.com/embed/<id>
+    const m = u.pathname.match(/\/embed\/([^/]+)/);
+    if (m) return m[1];
+  } catch (_) {}
+  // fallback: look for v= param
+  const m2 = url.match(/[?&]v=([^&]+)/);
+  return m2 ? m2[1] : null;
+}
+
+function loadYouTubePlayer(videoId) {
+  const container = document.getElementById('yt-embed-container');
+  container.innerHTML = '<div id="yt-player-el"></div>';
+
+  if (!ytReady) {
+    // API not ready yet — use iframe directly
+    container.innerHTML = `<iframe
+      src="https://www.youtube.com/embed/${videoId}?enablejsapi=1"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowfullscreen></iframe>`;
+    // Try to initialize the YT.Player after a short delay
+    setTimeout(() => initYTPlayer(videoId), 2000);
+    return;
+  }
+  initYTPlayer(videoId);
+}
+
+function initYTPlayer(videoId) {
+  if (typeof YT === 'undefined' || !YT.Player) {
+    setTimeout(() => initYTPlayer(videoId), 500);
+    return;
+  }
+  const container = document.getElementById('yt-embed-container');
+  container.innerHTML = '<div id="yt-player-el"></div>';
+  ytPlayer = new YT.Player('yt-player-el', {
+    videoId: videoId,
+    width: '100%',
+    height: '100%',
+    playerVars: { rel: 0, modestbranding: 1 },
+    events: {
+      onReady: () => {
+        document.getElementById('sync-btn').disabled = false;
+      }
     }
-  }
-
-  function startPolling(jobId) {
-    clearInterval(pollTimer);
-    pollTimer = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/status/${jobId}`);
-        const data = await res.json();
-
-        if (data.message) setStatus('processing', data.message);
-
-        if (data.status === 'done') {
-          clearInterval(pollTimer);
-          setStatus('done', 'Tabs generated!');
-          showTabs(data.tabs);
-          document.getElementById('gen-btn').disabled = false;
-        } else if (data.status === 'error') {
-          clearInterval(pollTimer);
-          setStatus('error', data.error || 'Something went wrong.');
-          document.getElementById('gen-btn').disabled = false;
-        }
-      } catch (_) { /* network blip — keep polling */ }
-    }, 2000);
-  }
-
-  function setStatus(type, msg) {
-    const box  = document.getElementById('status-box');
-    const spin = document.getElementById('spinner');
-    const icon = document.getElementById('status-icon');
-    const text = document.getElementById('status-msg');
-
-    box.classList.add('visible');
-    text.textContent = msg;
-
-    if (type === 'processing') {
-      spin.style.display = 'block'; icon.style.display = 'none';
-      text.style.color = 'var(--text-muted)';
-    } else if (type === 'done') {
-      spin.style.display = 'none'; icon.style.display = 'block';
-      icon.textContent = '✅'; text.style.color = 'var(--success)';
-    } else {
-      spin.style.display = 'none'; icon.style.display = 'block';
-      icon.textContent = '❌'; text.style.color = 'var(--error)';
-    }
-  }
-
-  function showTabs(tabs) {
-    document.getElementById('tab-output').textContent = tabs;
-    document.getElementById('output-card').classList.add('visible');
-    document.getElementById('output-card').scrollIntoView({ behavior: 'smooth' });
-  }
-
-  function copyTab() {
-    navigator.clipboard.writeText(document.getElementById('tab-output').textContent)
-      .then(() => {
-        const btn = document.querySelector('.btn-secondary');
-        btn.textContent = 'Copied!';
-        setTimeout(() => btn.textContent = 'Copy', 2000);
-      });
-  }
-
-  document.getElementById('yt-url').addEventListener('keydown', e => {
-    if (e.key === 'Enter') generate();
   });
+}
+
+// ─── Generate ────────────────────────────────────────────────────────────────
+async function generate() {
+  const url = document.getElementById('yt-url').value.trim();
+  if (!url) { alert('Paste a YouTube URL first.'); return; }
+
+  const duration = parseInt(document.getElementById('duration').value, 10);
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+  document.getElementById('main-panel').classList.remove('visible');
+  stopPlayback();
+  setStatus('processing', 'Submitting job...');
+
+  try {
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ youtube_url: url, max_duration: duration }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+    startPolling(data.job_id, url);
+  } catch (err) {
+    setStatus('error', err.message);
+    btn.disabled = false;
+  }
+}
+
+function startPolling(jobId, originalUrl) {
+  currentJobId = jobId;
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/status/${jobId}`);
+      const data = await res.json();
+
+      if (data.message) setStatus('processing', data.message);
+
+      if (data.status === 'done') {
+        clearInterval(pollTimer);
+        setStatus('done', 'Tabs generated!');
+        showResult(data, originalUrl);
+        document.getElementById('gen-btn').disabled = false;
+      } else if (data.status === 'error') {
+        clearInterval(pollTimer);
+        setStatus('error', data.error || 'Something went wrong.');
+        document.getElementById('gen-btn').disabled = false;
+      }
+    } catch (_) { /* network blip — keep polling */ }
+  }, 2000);
+}
+
+// ─── Show result ──────────────────────────────────────────────────────────────
+function showResult(data, originalUrl) {
+  currentTracks = data.tracks || [];
+  currentTrackIdx = 0;
+
+  // Load YouTube player
+  const videoId = extractVideoId(originalUrl);
+  if (videoId) {
+    loadYouTubePlayer(videoId);
+  }
+
+  // Build track selector pills
+  const pillsEl = document.getElementById('track-pills');
+  pillsEl.innerHTML = '';
+  currentTracks.forEach((track, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'pill' + (i === 0 ? ' active' : '');
+    btn.textContent = track.name;
+    btn.onclick = () => selectTrack(i);
+    pillsEl.appendChild(btn);
+  });
+
+  // Build MIDI download buttons
+  const midiBtnsEl = document.getElementById('midi-btns');
+  midiBtnsEl.innerHTML = '';
+  midiBtnsEl.style.display = 'flex';
+  midiBtnsEl.style.gap = '0.6rem';
+  midiBtnsEl.style.flexWrap = 'wrap';
+  currentTracks.forEach((track, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn-sm btn-secondary';
+    btn.innerHTML = `&#8595; ${track.name} MIDI`;
+    btn.onclick = () => downloadMidi(i);
+    midiBtnsEl.appendChild(btn);
+  });
+
+  // Render first track
+  if (currentTracks.length > 0) {
+    renderTrack(0);
+  }
+
+  document.getElementById('main-panel').classList.add('visible');
+  document.getElementById('main-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+function selectTrack(idx) {
+  stopPlayback();
+  currentTrackIdx = idx;
+
+  // Update pills
+  document.querySelectorAll('.pill').forEach((p, i) => {
+    p.classList.toggle('active', i === idx);
+  });
+
+  renderTrack(idx);
+}
+
+// ─── Tab table renderer ───────────────────────────────────────────────────────
+function renderTrack(idx) {
+  const track = currentTracks[idx];
+  if (!track) return;
+
+  currentColumns = track.columns || [];
+  activeColIdx = -1;
+
+  const tbody = document.getElementById('tab-tbody');
+  tbody.innerHTML = '';
+
+  if (!currentColumns.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 100;
+    td.style.color = 'var(--text-muted)';
+    td.style.padding = '1rem';
+    td.textContent = 'No notes detected.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+
+  const numStrings = track.tuning === 'bass' ? 4 : 6;
+  const stringNames = track.tuning === 'bass'
+    ? ['G', 'D', 'A', 'E']
+    : ['e', 'B', 'G', 'D', 'A', 'E'];
+
+  // Build rows: one per string
+  const rows = [];
+  for (let s = 0; s < numStrings; s++) {
+    const tr = document.createElement('tr');
+
+    // Label cell
+    const labelTd = document.createElement('td');
+    labelTd.className = 'ts-label';
+    labelTd.textContent = stringNames[s] + '|';
+    tr.appendChild(labelTd);
+
+    rows.push(tr);
+    tbody.appendChild(tr);
+  }
+
+  // Add cells for each column
+  currentColumns.forEach((col, colIdx) => {
+    for (let s = 0; s < numStrings; s++) {
+      const td = document.createElement('td');
+      td.className = 'tc';
+      td.dataset.col = colIdx;
+      td.dataset.time = col.time;
+
+      const fret = col.notes[String(s)];
+      if (fret !== undefined) {
+        td.textContent = String(fret);
+      } else {
+        td.textContent = '·';  // middle dot
+      }
+
+      rows[s].appendChild(td);
+    }
+  });
+
+  // Separator cells at end
+  for (let s = 0; s < numStrings; s++) {
+    const td = document.createElement('td');
+    td.className = 'ts-label';
+    td.textContent = '|';
+    rows[s].appendChild(td);
+  }
+}
+
+// ─── Playhead ────────────────────────────────────────────────────────────────
+function updatePlayhead(currentTime) {
+  if (!currentColumns.length) return;
+
+  // Find closest column index
+  let best = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < currentColumns.length; i++) {
+    const diff = Math.abs(currentColumns[i].time - currentTime);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = i;
+    }
+  }
+
+  if (best === activeColIdx) return;
+  activeColIdx = best;
+
+  // Remove active from all tc elements
+  document.querySelectorAll('.tc.active').forEach(el => el.classList.remove('active'));
+
+  // Add active to all cells in this column
+  const cells = document.querySelectorAll(`.tc[data-col="${best}"]`);
+  cells.forEach(el => el.classList.add('active'));
+
+  // Scroll into view
+  if (cells.length > 0) {
+    cells[0].scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+// ─── Synth playback ───────────────────────────────────────────────────────────
+let synth = null;
+
+async function playSynth() {
+  stopPlayback();
+
+  const track = currentTracks[currentTrackIdx];
+  if (!track || !track.note_events || track.note_events.length === 0) {
+    alert('No notes to play.');
+    return;
+  }
+
+  // Start Tone.js audio context
+  await Tone.start();
+
+  // Create synth with plucked sound
+  synth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'triangle' },
+    envelope: {
+      attack: 0.005,
+      decay: 0.3,
+      sustain: 0.1,
+      release: 0.4,
+    },
+    volume: -6,
+  }).toDestination();
+
+  Tone.Transport.stop();
+  Tone.Transport.cancel();
+  Tone.Transport.position = 0;
+
+  // Schedule notes
+  for (const event of track.note_events) {
+    const [start, end, pitch, amp] = event;
+    const duration = Math.max(0.05, end - start);
+    const velocity = Math.max(0.01, Math.min(1, amp));
+    const freq = Tone.Frequency(pitch, 'midi').toFrequency();
+
+    Tone.Transport.schedule((time) => {
+      try {
+        synth.triggerAttackRelease(freq, duration, time, velocity);
+      } catch (_) {}
+    }, start);
+  }
+
+  synthScheduled = true;
+  Tone.Transport.start();
+
+  // Poll transport position for playhead
+  synthPlayInterval = setInterval(() => {
+    if (Tone.Transport.state !== 'started') {
+      clearInterval(synthPlayInterval);
+      synthPlayInterval = null;
+      return;
+    }
+    updatePlayhead(Tone.Transport.seconds);
+  }, 50);
+}
+
+function stopPlayback() {
+  // Stop synth
+  if (synthPlayInterval) {
+    clearInterval(synthPlayInterval);
+    synthPlayInterval = null;
+  }
+  try {
+    Tone.Transport.stop();
+    Tone.Transport.cancel();
+  } catch (_) {}
+  if (synth) {
+    try { synth.releaseAll(); } catch (_) {}
+  }
+  synthScheduled = false;
+
+  // Stop YT sync
+  stopYTSync();
+}
+
+// ─── YouTube sync ─────────────────────────────────────────────────────────────
+function toggleYTSync() {
+  if (ytSyncing) {
+    stopYTSync();
+  } else {
+    startYTSync();
+  }
+}
+
+function startYTSync() {
+  if (!ytPlayer || typeof ytPlayer.getCurrentTime !== 'function') {
+    alert('YouTube player is not ready yet. Please wait a moment and try again.');
+    return;
+  }
+  stopPlayback();
+  ytSyncing = true;
+  const btn = document.getElementById('sync-btn');
+  btn.textContent = '⏹ Stop Sync';
+  btn.classList.add('active');
+
+  ytSyncInterval = setInterval(() => {
+    try {
+      const t = ytPlayer.getCurrentTime();
+      updatePlayhead(t);
+    } catch (_) {}
+  }, 50);
+}
+
+function stopYTSync() {
+  ytSyncing = false;
+  if (ytSyncInterval) {
+    clearInterval(ytSyncInterval);
+    ytSyncInterval = null;
+  }
+  const btn = document.getElementById('sync-btn');
+  if (btn) {
+    btn.textContent = '▶ Sync with Video';
+    btn.classList.remove('active');
+  }
+}
+
+// ─── MIDI download ────────────────────────────────────────────────────────────
+function downloadMidi(trackIdx) {
+  if (!currentJobId) return;
+  const a = document.createElement('a');
+  a.href = `/api/export/${currentJobId}/${trackIdx}`;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ─── Copy tab ─────────────────────────────────────────────────────────────────
+function copyTab() {
+  const track = currentTracks[currentTrackIdx];
+  if (!track) return;
+  navigator.clipboard.writeText(track.tab || '')
+    .then(() => {
+      const btn = document.getElementById('copy-btn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.innerHTML = '&#128203; Copy Tab'; }, 2000);
+    });
+}
+
+// ─── Status display ───────────────────────────────────────────────────────────
+function setStatus(type, msg) {
+  const box  = document.getElementById('status-box');
+  const spin = document.getElementById('spinner');
+  const icon = document.getElementById('status-icon');
+  const text = document.getElementById('status-msg');
+
+  box.classList.add('visible');
+  text.textContent = msg;
+
+  if (type === 'processing') {
+    spin.style.display = 'block'; icon.style.display = 'none';
+    text.style.color = 'var(--text-muted)';
+  } else if (type === 'done') {
+    spin.style.display = 'none'; icon.style.display = 'block';
+    icon.textContent = '✅'; text.style.color = 'var(--success)';
+  } else {
+    spin.style.display = 'none'; icon.style.display = 'block';
+    icon.textContent = '❌'; text.style.color = 'var(--error)';
+  }
+}
+
+// ─── Keyboard shortcut ────────────────────────────────────────────────────────
+document.getElementById('yt-url').addEventListener('keydown', e => {
+  if (e.key === 'Enter') generate();
+});
 </script>
 
 </body>

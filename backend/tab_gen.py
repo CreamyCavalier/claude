@@ -136,8 +136,8 @@ def notes_to_columns(
             frets = list(col.values())
             hand_pos = hand_pos * 0.7 + (sum(frets) / len(frets)) * 0.3
             result.append({
-                "time": bin_time[i],
-                "notes": {str(s): fret for s, fret in col.items()},
+                "time": float(bin_time[i]),
+                "notes": {str(s): int(fret) for s, fret in col.items()},
             })
 
     return result

@@ -1,4 +1,4 @@
-"""Convert note events to ASCII guitar tab."""
+"""Convert basic-pitch note events into ASCII guitar tab."""
 
 from typing import Dict, List, Tuple
 

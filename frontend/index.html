@@ -48,11 +48,7 @@
       background-clip: text;
     }
 
-    header p {
-      color: var(--text-muted);
-      margin-top: 0.5rem;
-      font-size: 0.95rem;
-    }
+    header p { color: var(--text-muted); margin-top: 0.5rem; font-size: 0.95rem; }
 
     .card {
       background: var(--surface);
@@ -74,10 +70,7 @@
       letter-spacing: 0.05em;
     }
 
-    .input-row {
-      display: flex;
-      gap: 0.75rem;
-    }
+    .input-row { display: flex; gap: 0.75rem; }
 
     input[type="text"] {
       flex: 1;
@@ -93,6 +86,29 @@
 
     input[type="text"]:focus { border-color: var(--accent); }
     input[type="text"]::placeholder { color: var(--text-muted); }
+
+    .options-row {
+      display: flex;
+      gap: 1.5rem;
+      margin-top: 1rem;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .option-group { display: flex; flex-direction: column; gap: 0.4rem; }
+
+    select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.9rem;
+      padding: 0.5rem 0.75rem;
+      outline: none;
+      cursor: pointer;
+    }
+
+    select:focus { border-color: var(--accent); }
 
     button {
       background: var(--accent);
@@ -111,7 +127,6 @@
     button:active:not(:disabled) { transform: scale(0.98); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* Status box */
     #status-box {
       display: none;
       align-items: center;
@@ -138,7 +153,6 @@
     #status-icon { font-size: 1.1rem; }
     #status-msg { font-size: 0.88rem; color: var(--text-muted); }
 
-    /* Hint */
     .hint {
       font-size: 0.77rem;
       color: var(--text-muted);
@@ -146,7 +160,6 @@
       line-height: 1.6;
     }
 
-    /* Output card */
     #output-card { display: none; }
     #output-card.visible { display: block; }
 
@@ -157,10 +170,7 @@
       margin-bottom: 1rem;
     }
 
-    .output-header h2 {
-      font-size: 0.95rem;
-      font-weight: 600;
-    }
+    .output-header h2 { font-size: 0.95rem; font-weight: 600; }
 
     .btn-secondary {
       background: var(--surface2);
@@ -200,7 +210,7 @@
 
 <header>
   <h1>🎸 AI Guitar Tab Generator</h1>
-  <p>Paste a YouTube URL — get AI-generated guitar tabs in seconds</p>
+  <p>Paste a YouTube URL — get AI-generated guitar tabs</p>
 </header>
 
 <div class="card">
@@ -216,6 +226,18 @@
     <button id="gen-btn" onclick="generate()">Generate</button>
   </div>
 
+  <div class="options-row">
+    <div class="option-group">
+      <label for="duration">Analyze first</label>
+      <select id="duration">
+        <option value="30">30 seconds</option>
+        <option value="60" selected>1 minute</option>
+        <option value="120">2 minutes</option>
+        <option value="300">5 minutes (slow)</option>
+      </select>
+    </div>
+  </div>
+
   <div id="status-box">
     <div class="spinner" id="spinner"></div>
     <span id="status-icon" style="display:none"></span>
@@ -223,8 +245,8 @@
   </div>
 
   <p class="hint">
-    Uses Spotify's <strong>basic-pitch</strong> AI — accurate on both single-note lines and chords.
-    Processing takes roughly 30–60 seconds.
+    Uses Spotify's <strong>basic-pitch</strong> AI — handles both single-note
+    lines and chords. Processing takes roughly 30–90 seconds.
   </p>
 </div>
 
@@ -236,7 +258,7 @@
   <pre id="tab-output"></pre>
 </div>
 
-<footer>Powered by basic-pitch &middot; Replicate &middot; Vercel</footer>
+<footer>Powered by basic-pitch &middot; yt-dlp &middot; FastAPI &middot; runs 100% on your machine</footer>
 
 <script>
   let pollTimer = null;
@@ -245,33 +267,33 @@
     const url = document.getElementById('yt-url').value.trim();
     if (!url) { alert('Paste a YouTube URL first.'); return; }
 
+    const duration = parseInt(document.getElementById('duration').value, 10);
     const btn = document.getElementById('gen-btn');
     btn.disabled = true;
     document.getElementById('output-card').classList.remove('visible');
     document.getElementById('tab-output').textContent = '';
-    setStatus('processing', 'Extracting audio from YouTube...');
+    setStatus('processing', 'Submitting job...');
 
     try {
       const res = await fetch('/api/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_url: url }),
+        body: JSON.stringify({ youtube_url: url, max_duration: duration }),
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
-      setStatus('processing', 'Submitted to AI — analyzing notes...');
-      startPolling(data.prediction_id);
+      startPolling(data.job_id);
     } catch (err) {
       setStatus('error', err.message);
       btn.disabled = false;
     }
   }
 
-  function startPolling(predictionId) {
+  function startPolling(jobId) {
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       try {
-        const res = await fetch(`/api/status?prediction_id=${encodeURIComponent(predictionId)}`);
+        const res = await fetch(`/api/status/${jobId}`);
         const data = await res.json();
 
         if (data.message) setStatus('processing', data.message);
@@ -287,14 +309,14 @@
           document.getElementById('gen-btn').disabled = false;
         }
       } catch (_) { /* network blip — keep polling */ }
-    }, 2500);
+    }, 2000);
   }
 
   function setStatus(type, msg) {
-    const box    = document.getElementById('status-box');
-    const spin   = document.getElementById('spinner');
-    const icon   = document.getElementById('status-icon');
-    const text   = document.getElementById('status-msg');
+    const box  = document.getElementById('status-box');
+    const spin = document.getElementById('spinner');
+    const icon = document.getElementById('status-icon');
+    const text = document.getElementById('status-msg');
 
     box.classList.add('visible');
     text.textContent = msg;

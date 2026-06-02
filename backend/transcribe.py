@@ -62,28 +62,37 @@ def _split_guitar_voices(events):
     return [(events, "Guitar")]
 
 
-def _download_audio(url: str, output_dir: str, max_duration: int) -> str:
+def _download_audio(url: str, output_dir: str, max_duration: int,
+                    cookies_file: Optional[str] = None) -> str:
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio/bestvideo/best",
         "outtmpl": os.path.join(output_dir, "audio_raw.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
     }
-    # Try browser cookies (YouTube bot-check) — Safari first, then Chrome
-    for browser in ("safari", "chrome", "chromium", "firefox", None):
-        opts = dict(ydl_opts)
-        if browser:
-            opts["cookiesfrombrowser"] = (browser, None, None, None)
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-            break
-        except Exception as exc:
-            if browser is None:
-                raise
-            if "Sign in" not in str(exc) and "bot" not in str(exc):
-                raise  # unrelated error, don't retry
+
+    if cookies_file and os.path.exists(cookies_file):
+        # Explicit cookies.txt takes priority
+        ydl_opts["cookiefile"] = cookies_file
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    else:
+        # Try browser cookie jars, then bare (Safari → Chrome → Firefox → none)
+        for browser in ("safari", "chrome", "chromium", "firefox", None):
+            opts = dict(ydl_opts)
+            if browser:
+                opts["cookiesfrombrowser"] = (browser, None, None, None)
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([url])
+                break
+            except Exception as exc:
+                if browser is None:
+                    raise
+                msg = str(exc)
+                if "Sign in" not in msg and "bot" not in msg and "cookies" not in msg.lower():
+                    raise
 
     raw_path = next(
         (os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith(".wav")),
@@ -168,10 +177,93 @@ def _serialize_events(note_events) -> List[List]:
     return result
 
 
+def _run_pipeline(audio_path: str, tmpdir: str, status: Callable) -> Dict[str, Any]:
+    """Shared demucs → basic-pitch → tab pipeline for both YouTube and local files."""
+    stems_dir = os.path.join(tmpdir, "stems")
+    guitar_stem = _run_demucs(audio_path, stems_dir, status)
+
+    if guitar_stem:
+        bp_input = os.path.join(tmpdir, "guitar_22k.wav")
+        _to_mono_22k(guitar_stem, bp_input)
+        status("Analyzing guitar stem with AI pitch detection...")
+    else:
+        bp_input = os.path.join(tmpdir, "audio_22k.wav")
+        _to_mono_22k(audio_path, bp_input)
+        status("Analyzing audio — this takes 30–60 s...")
+
+    status("Loading AI pitch model...")
+    from basic_pitch.inference import predict
+    from basic_pitch import ICASSP_2022_MODEL_PATH
+
+    status("Detecting notes...")
+    _model_out, _midi, note_events = predict(
+        bp_input,
+        ICASSP_2022_MODEL_PATH,
+        minimum_frequency=80.0,
+        maximum_frequency=1400.0,
+        onset_threshold=0.5,
+        frame_threshold=0.3,
+        minimum_note_length=58,
+    )
+
+    status("Generating tracks...")
+
+    guitar_events = [e for e in note_events if e[2] >= BASS_PITCH_THRESHOLD]
+    bass_events   = [e for e in note_events if e[2] < BASS_PITCH_THRESHOLD]
+
+    tracks = []
+    for voice_events, voice_name in _split_guitar_voices(guitar_events):
+        tracks.append({
+            "name": voice_name,
+            "tuning": "guitar",
+            "note_events": _serialize_events(voice_events),
+            "tab": notes_to_tab(voice_events, tuning="guitar"),
+            "columns": notes_to_columns(voice_events, tuning="guitar"),
+        })
+
+    if len(bass_events) > MIN_BASS_NOTES:
+        tracks.append({
+            "name": "Bass",
+            "tuning": "bass",
+            "note_events": _serialize_events(bass_events),
+            "tab": notes_to_tab(bass_events, tuning="bass"),
+            "columns": notes_to_columns(bass_events, tuning="bass"),
+        })
+
+    return {
+        "tracks": tracks,
+        "duration": float(max(e[1] for e in note_events)) if note_events else 0.0,
+    }
+
+
+def transcribe_file(
+    audio_path: str,
+    max_duration: int = 60,
+    on_status: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Transcribe a local audio/video file (mp3, wav, m4a, mp4, etc.)."""
+    def status(msg: str) -> None:
+        if on_status:
+            on_status(msg)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        trimmed = os.path.join(tmpdir, "audio.wav")
+        status("Preparing audio...")
+        subprocess.run(
+            ["ffmpeg", "-i", audio_path,
+             "-t", str(max_duration),
+             "-ar", "44100", "-ac", "2",
+             trimmed, "-y", "-loglevel", "quiet"],
+            check=True,
+        )
+        return _run_pipeline(trimmed, tmpdir, status)
+
+
 def transcribe_youtube(
     url: str,
     max_duration: int = 60,
     on_status: Optional[Callable[[str], None]] = None,
+    cookies_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     def status(msg: str) -> None:
         if on_status:
@@ -179,66 +271,5 @@ def transcribe_youtube(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         status("Downloading audio from YouTube...")
-        audio_path = _download_audio(url, tmpdir, max_duration)
-
-        # Try demucs source separation first
-        stems_dir = os.path.join(tmpdir, "stems")
-        guitar_stem = _run_demucs(audio_path, stems_dir, status)
-
-        if guitar_stem:
-            # Downsample guitar stem for basic-pitch
-            bp_input = os.path.join(tmpdir, "guitar_22k.wav")
-            _to_mono_22k(guitar_stem, bp_input)
-            status("Analyzing guitar stem with AI pitch detection...")
-        else:
-            # No demucs — downsample full mix
-            bp_input = os.path.join(tmpdir, "audio_22k.wav")
-            _to_mono_22k(audio_path, bp_input)
-            status("Analyzing audio — this takes 30–60 s...")
-
-        status("Loading AI pitch model...")
-        from basic_pitch.inference import predict
-        from basic_pitch import ICASSP_2022_MODEL_PATH
-
-        status("Detecting notes..." if guitar_stem else "Analyzing audio — this takes 30–60 s...")
-        _model_out, _midi, note_events = predict(
-            bp_input,
-            ICASSP_2022_MODEL_PATH,
-            minimum_frequency=80.0,
-            maximum_frequency=1400.0,
-            onset_threshold=0.5,
-            frame_threshold=0.3,
-            minimum_note_length=58,   # ~58 ms — filters out noise blips
-        )
-
-        status("Generating tracks...")
-
-        guitar_events = [e for e in note_events if e[2] >= BASS_PITCH_THRESHOLD]
-        bass_events   = [e for e in note_events if e[2] < BASS_PITCH_THRESHOLD]
-
-        tracks = []
-
-        for voice_events, voice_name in _split_guitar_voices(guitar_events):
-            tracks.append({
-                "name": voice_name,
-                "tuning": "guitar",
-                "note_events": _serialize_events(voice_events),
-                "tab": notes_to_tab(voice_events, tuning="guitar"),
-                "columns": notes_to_columns(voice_events, tuning="guitar"),
-            })
-
-        if len(bass_events) > MIN_BASS_NOTES:
-            tracks.append({
-                "name": "Bass",
-                "tuning": "bass",
-                "note_events": _serialize_events(bass_events),
-                "tab": notes_to_tab(bass_events, tuning="bass"),
-                "columns": notes_to_columns(bass_events, tuning="bass"),
-            })
-
-        duration = float(max(e[1] for e in note_events)) if note_events else 0.0
-
-        return {
-            "tracks": tracks,
-            "duration": duration,
-        }
+        audio_path = _download_audio(url, tmpdir, max_duration, cookies_file=cookies_file)
+        return _run_pipeline(audio_path, tmpdir, status)

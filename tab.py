@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Tab a YouTube video from the command line.
+"""Tab a YouTube video or local audio file from the command line.
 
 Usage:
-    python tab.py <youtube-url> [options]
+    python3 tab.py <youtube-url-or-audio-file> [options]
 
 Examples:
-    python tab.py https://youtu.be/dQw4w9WgXcQ
-    python tab.py https://youtu.be/dQw4w9WgXcQ --instrument lead
-    python tab.py https://youtu.be/dQw4w9WgXcQ --instrument bass --duration 120
+    python3 tab.py https://youtu.be/dQw4w9WgXcQ --instrument lead
+    python3 tab.py /path/to/song.wav --instrument lead
+    python3 tab.py /path/to/song.mp3 --instrument bass --duration 120
 """
 
 import argparse
@@ -25,17 +25,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate guitar/bass tabs from a YouTube video.",
+        description="Generate guitar/bass tabs from a YouTube video or audio file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+YouTube bot-check workaround:
+  If YouTube rejects the download, pass the audio file directly instead:
+    1. Download the audio any way you like (browser, online converter, etc.)
+    2. python3 tab.py /path/to/audio.mp3 --instrument lead
+""",
     )
-    parser.add_argument("url", help="YouTube URL")
+    parser.add_argument("source", help="YouTube URL  OR  path to an audio/video file")
     parser.add_argument(
         "--instrument", "-i",
         default=None,
-        help=(
-            "Which track to show: 'guitar', 'lead', 'rhythm', 'bass'. "
-            "Default: print all detected tracks."
-        ),
+        help="Which track to show: 'guitar', 'lead', 'rhythm', 'bass'. Default: all.",
     )
     parser.add_argument(
         "--duration", "-d",
@@ -48,32 +51,50 @@ def main() -> None:
         "--out", "-o",
         default=None,
         metavar="DIR",
-        help="Output directory (default: ./tabs/<video-id>)",
+        help="Output directory (default: ./tabs/<name>)",
+    )
+    parser.add_argument(
+        "--cookies", "-c",
+        default=None,
+        metavar="FILE",
+        help="Netscape cookies.txt file to pass to yt-dlp (helps with bot-check)",
     )
     args = parser.parse_args()
+
+    is_file = os.path.exists(args.source)
 
     # ── resolve output dir ──────────────────────────────────────────────────
     if args.out:
         out_dir = args.out
+    elif is_file:
+        name = os.path.splitext(os.path.basename(args.source))[0]
+        out_dir = os.path.join("tabs", name)
     else:
-        vid_id = _extract_video_id(args.url) or "output"
+        vid_id = _extract_video_id(args.source) or "output"
         out_dir = os.path.join("tabs", vid_id)
     os.makedirs(out_dir, exist_ok=True)
 
-    # ── run pipeline ────────────────────────────────────────────────────────
-    print(f"\n🎸  Tabbing: {args.url}")
-    print(f"    Analysing first {args.duration}s → output in {out_dir}/\n")
-
-    from transcribe import transcribe_youtube
-
     def status(msg: str) -> None:
-        print(f"  ▸ {msg}")
+        print(f"  ▸ {msg}", flush=True)
 
-    result = transcribe_youtube(args.url, args.duration, on_status=status)
+    if is_file:
+        print(f"\n🎸  Tabbing file: {args.source}")
+        print(f"    Analysing first {args.duration}s → output in {out_dir}/\n")
+        from transcribe import transcribe_file
+        result = transcribe_file(args.source, args.duration, on_status=status)
+    else:
+        print(f"\n🎸  Tabbing: {args.source}")
+        print(f"    Analysing first {args.duration}s → output in {out_dir}/\n")
+        from transcribe import transcribe_youtube
+        result = transcribe_youtube(
+            args.source, args.duration,
+            on_status=status,
+            cookies_file=args.cookies,
+        )
+
     tracks = result["tracks"]
-
     if not tracks:
-        print("\n✗  No notes detected. Try a different video or longer duration.")
+        print("\n✗  No notes detected. Try a longer --duration or different source.")
         sys.exit(1)
 
     # ── filter by instrument if requested ───────────────────────────────────
@@ -91,13 +112,11 @@ def main() -> None:
     for track in tracks:
         name_slug = track["name"].lower().replace(" ", "_")
 
-        # ASCII tab → .txt
         txt_path = os.path.join(out_dir, f"{name_slug}.txt")
         with open(txt_path, "w") as f:
             f.write(track["tab"])
         print(f"  ✔  {track['name']} tab  →  {txt_path}")
 
-        # GP5 file
         try:
             from gp_export import notes_to_gp5_bytes
             gp_bytes = notes_to_gp5_bytes(
@@ -113,10 +132,7 @@ def main() -> None:
         except Exception as e:
             print(f"  ✗  GP5 export failed: {e}")
 
-        # Print tab to terminal
-        print(f"\n{'─'*60}")
-        print(f"  {track['name']}")
-        print('─'*60)
+        print(f"\n{'─'*60}  {track['name']}")
         print(track["tab"])
         print()
 

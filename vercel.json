@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "functions": {
+    "api/transcribe.py": { "maxDuration": 30 },
+    "api/status.py": { "maxDuration": 30 }
+  }
+}
